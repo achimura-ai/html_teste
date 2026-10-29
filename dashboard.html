@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador Financeiro Integrado</title>
+    <!-- Tailwind CSS para design limpo e moderno -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Chart.js para renderização de gráficos dinâmicos -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800">
+
+    <div class="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <header class="mb-8 text-center sm:text-left">
+            <h1 class="text-3xl font-extrabold text-blue-600">Dashboard Web com Banco de Dados Local</h1>
+            <p class="text-gray-600 mt-1">Insira, edite e visualize dados em tempo real (Salvo no Navegador via IndexedDB)</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Coluna do Formulário -->
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 h-fit">
+                <h2 id="form-title" class="text-xl font-bold mb-4 text-gray-700">Adicionar Novo Registro</h2>
+                
+                <form id="data-form" class="space-y-4">
+                    <input type="hidden" id="record-id">
+                    
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-600 mb-1">Mês/Ano</label>
+                        <input type="month" id="form-month" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-600 mb-1">Faturamento (R$)</label>
+                        <input type="number" id="form-revenue" min="0" step="0.01" required placeholder="Ex: 5000" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-600 mb-1">Despesas (R$)</label>
+                        <input type="number" id="form-expenses" min="0" step="0.01" required placeholder="Ex: 2500" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+
+                    <div class="flex gap-2 pt-2">
+                        <button type="submit" id="btn-submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors cursor-pointer text-center">
+                            Salvar Dados
+                        </button>
+                        <button type="button" id="btn-cancel" class="hidden bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-2 px-4 rounded-lg transition-colors cursor-pointer">
+                            Cancelar
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Coluna dos Gráficos e Tabela -->
+            <div class="lg:col-span-2 space-y-8">
+                <!-- Área do Gráfico -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h2 class="text-xl font-bold mb-4 text-gray-700">Análise de Desempenho Finaceiro</h2>
+                    <div class="relative h-64 sm:h-80 w-full">
+                        <canvas id="financialChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Tabela de Dados -->
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="p-6 border-b border-gray-100 flex justify-between items-center">
+                        <h2 class="text-xl font-bold text-gray-700">Registros Armazenados</h2>
+                        <span id="record-count" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">0 registros</span>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 border-b border-gray-200 text-gray-600 text-xs uppercase font-semibold">
+                                    <th class="p-4">Mês/Ano</th>
+                                    <th class="p-4 text-right">Faturamento</th>
+                                    <th class="p-4 text-right">Despesas</th>
+                                    <th class="p-4 text-right">Lucro Líquido</th>
+                                    <th class="p-4 text-center">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body" class="divide-y divide-gray-100 text-sm">
+                                <!-- Preenchido dinamicamente via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="empty-state" class="text-center py-8 text-gray-400 hidden">
+                        Nenhum dado cadastrado ainda. Use o formulário ao lado!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script de inicialização e controle do Banco IndexedDB + Gráficos -->
+    <script>
+        let db;
+        let chart;
+        const dbName = "DashboardDB";
+        const storeName = "financials";
+
+        // 1. Inicializar Banco de Dados IndexedDB (Nativo do Navegador)
+        const request = indexedDB.open(dbName, 1);
+
+        request.onerror = function(event) {
+            console.error("Erro ao abrir banco de dados:", event.target.error);
+        };
+
+        request.onsuccess = function(event) {
+            db = event.target.result;
+            loadData();
+        };
+
+        request.onupgradeneeded = function(event) {
+            const dbInstance = event.target.result;
+            dbInstance.createObjectStore(storeName, { keyPath: "id", autoIncrement: true });
+        };
+
+        // 2. Elementos da Interface
+        const dataForm = document.getElementById('data-form');
+        const recordIdInput = document.getElementById('record-id');
+        const formMonth = document.getElementById('form-month');
+        const formRevenue = document.getElementById('form-revenue');
+        const formExpenses = document.getElementById('form-expenses');
+        const formTitle = document.getElementById('form-title');
+        const btnSubmit = document.getElementById('btn-submit');
+        const btnCancel = document.getElementById('btn-cancel');
+        const tableBody = document.getElementById('table-body');
+        const emptyState = document.getElementById('empty-state');
+        const recordCount = document.getElementById('record-count');
+
+        // 3. Configurar e Criar Gráfico Inicial (Chart.js)
+        const ctx = document.getElementById('financialChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Faturamento (R$)',
+                        data: [],
+                        backgroundColor: 'rgba(59, 130, 246, 0.75)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        borderWidth: 1,
+                        borderRadius: 6
+                    },
+                    {
+                        label: 'Despesas (R$)',
+                        data: [],
+                        backgroundColor: 'rgba(239, 68, 68, 0.75)',
+                        borderColor: 'rgb(239, 68, 68)',
+                        borderWidth: 1,
+                        borderRadius: 6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) { return 'R$ ' + value; }
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': R$ ' + context.raw.toFixed(2);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // 4. Carregar Dados do Banco e Atualizar Tela
+        function loadData() {
+            const transaction = db.transaction([storeName], "readonly");
+            const objectStore = transaction.objectStore(storeName);
+            const getAllRequest = objectStore.getAll();
+
+            getAllRequest.onsuccess = function() {
+                const data = getAllRequest.result;
+                
+                // Ordenar por data (mês)
+                data.sort((a, b) => new Date(a.month) - new Date(b.month));
+                
+                renderTable(data);
+                renderChart(data);
+            };
+        }
+
+        // 5. Renderizar Tabela HTML
+        function renderTable(data) {
+            tableBody.innerHTML = '';
+            recordCount.textContent = `${data.length} ${data.length === 1 ? 'registro' : 'registros'}`;
+
+            if (data.length === 0) {
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+
+            data.forEach(item => {
+                const profit = item.revenue - item.expenses;
+                const profitClass = profit >= 0 ? 'text-green-600' : 'text-red-600';
+                
+                // Formatar data AAAA-MM para MM/AAAA
+                const [year, month] = item.month.split('-');
+                const formattedDate = `${month}/${year}`;
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 transition-colors";
+                tr.innerHTML = `
+                    <td class="p-4 font-medium text-gray-900">${formattedDate}</td>
+                    <td class="p-4 text-right text-blue-600 font-medium">R$ ${item.revenue.toFixed(2)}</td>
+                    <td class="p-4 text-right text-red-500">R$ ${item.expenses.toFixed(2)}</td>
+                    <td class="p-4 text-right font-semibold ${profitClass}">R$ ${profit.toFixed(2)}</td>
+                    <td class="p-4 text-center space-x-2">
+                        <button onclick="editRecord(${item.id})" class="text-blue-600 hover:text-blue-800 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded transition-colors cursor-pointer text-xs">Editar</button>
+                        <button onclick="deleteRecord(${item.id})" class="text-red-600 hover:text-red-800 font-medium bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded transition-colors cursor-pointer text-xs">Excluir</button>
+                    </td>
+                `;
+                tableBody.appendChild(tr);
+            });
+        }
+
+        // 6. Atualizar Gráfico com Dados Atuais
+        function renderChart(data) {
+            const labels = data.map(item => {
+                const [year, month] = item.month.split('-');
+                return `${month}/${year}`;
+            });
+            const revenues = data.map(item => item.revenue);
+            const expenses = data.map(item => item.expenses);
+
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = revenues;
+            chart.data.datasets[1].data = expenses;
+            chart.update();
+        }
+
+        // 7. Salvar ou Atualizar Registro (Submit do Formulário)
+        dataForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const recordId = recordIdInput.value;
+            const record = {
+                month: formMonth.value,
+                revenue: parseFloat(formRevenue.value),
+                expenses: parseFloat(formExpenses.value)
+            };
+
+            const transaction = db.transaction([storeName], "readwrite");
+            const objectStore = transaction.objectStore(storeName);
+
+            if (recordId) {
+                // Atualizar registro existente
+                record.id = parseInt(recordId);
+                const updateRequest = objectStore.put(record);
+                updateRequest.onsuccess = () => resetForm();
+            } else {
+                // Adicionar novo registro
+                const addRequest = objectStore.add(record);
+                addRequest.onsuccess = () => dataForm.reset();
+            }
+
+            transaction.oncomplete = function() {
+                loadData();
+            };
+        });
+
+        // 8. Carregar Registro no Formulário para Edição
+        window.editRecord = function(id) {
+            const transaction = db.transaction([storeName], "readonly");
+            const objectStore = transaction.objectStore(storeName);
+            const request = objectStore.get(id);
+
+            request.onsuccess = function() {
+                const record = request.result;
+                if (record) {
+                    recordIdInput.value = record.id;
+                    formMonth.value = record.month;
+                    formRevenue.value = record.revenue;
+                    formExpenses.value = record.expenses;
+
+                    formTitle.textContent = "Editar Registro";
+                    btnSubmit.textContent = "Atualizar Registro";
+                    btnCancel.classList.remove('hidden');
+                    formMonth.focus();
+                }
+            };
+        };
+
+        // 9. Excluir Registro do Banco
+        window.deleteRecord = function(id) {
+            if (confirm("Tem certeza que deseja remover este registro?")) {
+                const transaction = db.transaction([storeName], "readwrite");
+                const objectStore = transaction.objectStore(storeName);
+                const deleteRequest = objectStore.delete(id);
+
+                deleteRequest.onsuccess = function() {
+                    loadData();
+                    if(recordIdInput.value == id) {
+                        resetForm();
+                    }
+                };
+            }
+        };
+
+        // 10. Cancelar Edição e Resetar Formulário
+        btnCancel.addEventListener('click', resetForm);
+
+        function resetForm() {
+            dataForm.reset();
+            recordIdInput.value = '';
+            formTitle.textContent = "Adicionar Novo Registro";
+            btnSubmit.textContent = "Salvar Dados";
+            btnCancel.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
